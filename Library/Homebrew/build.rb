@@ -65,7 +65,6 @@ def install f
       ENV.prepend_path 'PATH', "#{opt}/bin"
       ENV.prepend_path 'PKG_CONFIG_PATH', "#{opt}/lib/pkgconfig"
       ENV.prepend_path 'PKG_CONFIG_PATH', "#{opt}/share/pkgconfig"
-      ENV.prepend_path 'CMAKE_PREFIX_PATH', opt
 
       if superenv?
         ENV.prepend 'HOMEBREW_DEP_PREFIXES', dep.name
@@ -73,6 +72,7 @@ def install f
         ENV.prepend 'LDFLAGS', "-L#{opt}/lib" if (opt/:lib).directory?
         ENV.prepend 'CPPFLAGS', "-I#{opt}/include" if (opt/:include).directory?
         ENV.prepend_path 'ACLOCAL_PATH', "#{opt}/share/aclocal"
+        ENV.prepend_path 'CMAKE_PREFIX_PATH', opt
       end
     end
   end

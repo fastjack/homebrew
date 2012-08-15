@@ -1,6 +1,6 @@
 #!/bin/sh
 
-HOMEBREW_PREFIX=$(dirname $(dirname $(dirname $(cd $(dirname $0) && pwd))))
+source x..
 AUTOCONF="$HOMEBREW_PREFIX/bin/autoconf"
 
 if [ -x "$AUTOCONF" ]; then

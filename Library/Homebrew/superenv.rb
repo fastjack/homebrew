@@ -1,5 +1,16 @@
 require 'extend/ENV'
 
+### Why `superenv`?
+# 1) Only specify the environment we need (NO LDFLAGS for cmake)
+# 2) Only apply compiler specific options when we are calling that compiler
+# 3) Force all incpaths and libpaths into the cc instantiation (less bugs)
+# 4) Cater toolchain usage to specific Xcode versions
+# 5) Remove flags that we don't want or that will break builds
+# 6) Simpler code
+# 7) Simpler formula that *just work*
+# 8) Build-system agnostic configuration of the tool-chain
+# 9) No messing around trying to force build systems to use a particular cc
+
 def superenv_bin
   @bin ||= (HOMEBREW_REPOSITORY/"Library/x").children.reject{|d| d.basename.to_s > MacOS::Xcode.version }.max
 end
@@ -10,8 +21,11 @@ end
 
 class << ENV
   def reset
-    %w{CC CXX LD CPP OBJC CFLAGS CXXFLAGS OBJCFLAGS OBJCXXFLAGS LDFLAGS CPPFLAGS 
-      MAKEFLAGS SDKROOT CMAKE_PREFIX_PATH CMAKE_FRAMEWORK_PATH MAKE MAKEJOBS}.
+    %w{CC CXX LD CPP OBJC MAKE
+      CFLAGS CXXFLAGS OBJCFLAGS OBJCXXFLAGS LDFLAGS CPPFLAGS
+      MACOS_DEPLOYMENT_TARGET SDKROOT
+      CMAKE_PREFIX_PATH CMAKE_INCLUDE_PATH CMAKE_FRAMEWORK_PATH
+      MAKEFLAGS MAKEJOBS}.
       each{ |x| delete(x) }
     delete('CDPATH') # avoid make issues that depend on changing directories
     delete('GREP_OPTIONS') # can break CMake
@@ -26,7 +40,6 @@ class << ENV
 
   def setup_build_environment
     reset
-
     ENV['CC'] = determine_cc
     ENV['CXX'] = determine_cxx
     ENV['LD'] = 'ld'
@@ -34,27 +47,7 @@ class << ENV
     ENV['MAKE'] = 'make'
     ENV['MAKEFLAGS'] ||= "-j#{Hardware.processor_count}"
     ENV['PATH'] = determine_path
-    ENV['CMAKE_PREFIX_PATH'] = determine_cmake_prefix_path
     ENV['PKG_CONFIG_PATH'] = determine_pkg_config_path
-
-    macosxsdk(MacOS.version)
-  end
-
-  def macosxsdk version
-    #TODO simplify
-    delete('MACOSX_DEPLOYMENT_TARGET')
-    delete('CMAKE_FRAMEWORK_PATH')
-
-    ENV['MACOSX_DEPLOYMENT_TARGET'] = version.to_s if version == MacOS.version
-
-    if not MacOS::CLT.installed?
-      remove 'CMAKE_PREFIX_PATH', ENV['SDKROOT']
-      ENV['SDKROOT'] = MacOS.sdk_path(version.to_s)
-      ENV['CMAKE_FRAMEWORK_PATH'] = "#{ENV['SDKROOT']}/System/Library/Frameworks"
-      prepend_path 'CMAKE_PREFIX_PATH', "#{ENV['SDKROOT']}/usr"
-    else
-      ENV['CMAKE_PREFIX_PATH'] = HOMEBREW_PREFIX.to_s
-    end
   end
 
   def universal_binary
@@ -104,27 +97,12 @@ class << ENV
     ENV['CC'] = "clang"
     ENV['CXX'] = "clang++"
   end
-
   def make_jobs
-    ENV['MAKEFLAGS'] =~ /-j(\d)+/
+    ENV['MAKEFLAGS'] =~ /-\w*j(\d)+/
     [$1.to_i, 1].max
   end
 
   private
-
-  def determine_path
-    paths = ORIGINAL_PATHS.dup
-    paths.delete(HOMEBREW_PREFIX/:bin)
-    paths.unshift "/opt/X11/bin"
-    paths.unshift("#{HOMEBREW_PREFIX}/bin")
-    if not MacOS::CLT.installed?
-      xcpath = `xcode-select -print-path`.chomp #TODO future-proofed
-      paths.unshift("#{xcpath}/usr/bin")
-      paths.unshift("#{xcpath}/Toolchains/XcodeDefault.xctoolchain/usr/bin")
-    end
-    paths.unshift(superenv_bin)
-    paths.to_path_s
-  end
 
   def determine_cc
     if ARGV.include? '--use-gcc'
@@ -164,17 +142,27 @@ class << ENV
     end
   end
 
+  def determine_path
+    paths = ORIGINAL_PATHS.dup
+    paths.delete(HOMEBREW_PREFIX/:bin)
+    paths.unshift("/opt/X11/bin")
+    paths.unshift("#{HOMEBREW_PREFIX}/bin")
+    if MacOS::Xcode.version >= "4.3" and not MacOS.xcode_clt_installed?
+      paths.unshift("#{MacOS.xcode_43_developer_dir}/usr/bin")
+      paths.unshift("#{MacOS.xcode_43_developer_dir}/Toolchains/XcodeDefault.xctoolchain/usr/bin")
+    end
+    paths.unshift(superenv_bin)
+    paths.to_path_s
+  end
+
   def determine_pkg_config_path
-    paths = %W{#{MacOS::X11.lib}/pkgconfig #{MacOS::X11.share}/pkgconfig}
+    paths = %w{/opt/X11/lib/pkgconfig /opt/X11/share/pkgconfig
+               /usr/X11/lib/pkgconfig /usr/X11/share/pkgconfig}
     if MacOS.mountain_lion?
       # Mountain Lion no longer ships some .pcs; ensure we pick up our versions
       paths << "#{HOMEBREW_REPOSITORY}/Library/Homebrew/pkgconfig"
     end
     paths.to_path_s
-  end
-
-  def determine_cmake_prefix_path
-    [HOMEBREW_PREFIX, MacOS::X11.prefix].to_path_s
   end
 
 end if superenv?
@@ -190,5 +178,30 @@ end
 class Array
   def to_path_s
     map(&:to_s).select{|s| s and File.directory? s }.join(':')
+  end
+end
+
+# new code because I don't really trust the Xcode code now having researched it more
+module MacOS extend self
+  def xcode_clt_installed?
+    File.executable? "/usr/bin/clang" and File.executable? "/usr/bin/lldb"
+  end
+
+  def xcode_43_developer_dir
+    @xcode_43_developer_dir ||=
+      tst(ENV['DEVELOPER_DIR']) ||
+      tst(`xcode-select -print-path 2>/dev/null`) ||
+      tst("/Applications/Xcode.app/Contents/Developer") ||
+      MacOS.mdfind("com.apple.dt.Xcode").find{|path| tst(path) }
+    raise unless @xcode_43_developer_dir
+    @xcode_43_developer_dir
+  end
+
+  private
+
+  def tst prefix
+    prefix = prefix.to_s.chomp
+    xcrun = "#{prefix}/usr/bin/xcrun"
+    prefix if xcrun != "/usr/bin/xcrun" and File.executable? xcrun
   end
 end

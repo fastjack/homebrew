@@ -1,0 +1,10 @@
+#!/bin/sh
+
+HOMEBREW_PREFIX=$(dirname $(dirname $(dirname $(cd $(dirname $0) && pwd))))
+[ -x /usr/bin/cc ] || NCLT="1"
+
+if [ $NCLT ]; then
+  [ $DEVELOPER_DIR ] || DEVELOPER_DIR=$("xcode-select" -print-path)
+  [ $DEVELOPER_DIR ] || DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
+  SDKROOT="$DEVELOPER_DIR/Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.8.sdk"
+fi
