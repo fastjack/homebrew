@@ -11,7 +11,7 @@ class Nibtools < Formula
   depends_on 'opencbm'
   
   def install
-    system "make", "-f", "GNU/Makefile", "CBM_LNX_PATH=/usr/local/Cellar/opencbm/HEAD", "linux"
+    system "make", "-f", "GNU/Makefile", "CBM_LNX_PATH=#{prefix}", "linux"
     bin.install 'nibconv', 'nibread', 'nibrepair', 'nibscan', 'nibwrite'
     doc.install 'readme.txt'
   end
