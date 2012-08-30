@@ -148,6 +148,8 @@ class Formula
     self.class.build
   end
 
+  def opt_prefix; HOMEBREW_PREFIX/:opt/name end
+
   # Use the @active_spec to detect the download strategy.
   # Can be overriden to force a custom download strategy
   def download_strategy
@@ -289,30 +291,23 @@ class Formula
     Dir["#{HOMEBREW_REPOSITORY}/Library/Formula/*.rb"].map{ |f| File.basename f, '.rb' }.sort
   end
 
-  # an array of all Formula, instantiated
-  def self.all
-    map{ |f| f }
-  end
-  def self.map
-    rv = []
-    each{ |f| rv << yield(f) }
-    rv
-  end
   def self.each
-    names.each do |n|
-      begin
-        yield Formula.factory(n)
-      rescue
+    names.each do |name|
+      yield begin
+        Formula.factory(name)
+      rescue => e
         # Don't let one broken formula break commands. But do complain.
-        onoe "Formula #{n} will not import."
+        onoe "Failed to import: #{name}"
+        next
       end
     end
   end
-
-  def self.select
-    ff = []
-    each{ |f| ff << f if yield(f) }
-    ff
+  class << self
+    include Enumerable
+  end
+  def self.all
+    opoo "Formula.all is deprecated, simply use Formula.map"
+    map
   end
 
   def self.installed
@@ -365,14 +360,15 @@ class Formula
     if name =~ %r[(https?|ftp)://]
       url = name
       name = Pathname.new(name).basename
-      target_file = HOMEBREW_CACHE_FORMULA+name
+      path = HOMEBREW_CACHE_FORMULA+name
       name = name.basename(".rb").to_s
 
-      HOMEBREW_CACHE_FORMULA.mkpath
-      FileUtils.rm target_file, :force => true
-      curl url, '-o', target_file
+      unless Object.const_defined? self.class_s(name)
+        HOMEBREW_CACHE_FORMULA.mkpath
+        FileUtils.rm path, :force => true
+        curl url, '-o', path
+      end
 
-      require target_file
       install_type = :from_url
     else
       name = Formula.canonical_name(name)
@@ -385,20 +381,21 @@ class Formula
 
         path = Pathname.new(name)
         name = path.stem
-
-        require path unless Object.const_defined? self.class_s(name)
-
         install_type = :from_path
-        target_file = path.to_s
       else
         # For names, map to the path and then require
-        require Formula.path(name) unless Object.const_defined? self.class_s(name)
+        path = Formula.path(name)
         install_type = :from_name
       end
     end
 
+    klass_name = self.class_s(name)
+    unless Object.const_defined? klass_name
+      puts "#{$0}: loading #{path}" if ARGV.debug?
+      require path
+    end
+
     begin
-      klass_name = self.class_s(name)
       klass = Object.const_get klass_name
     rescue NameError
       # TODO really this text should be encoded into the exception
@@ -409,8 +406,14 @@ class Formula
     end
 
     return klass.new(name) if install_type == :from_name
-    return klass.new(name, target_file)
-  rescue LoadError
+    return klass.new(name, path.to_s)
+  rescue NoMethodError
+    # This is a programming error in an existing formula, and should not
+    # have a "no such formula" message.
+    raise
+  rescue LoadError, NameError
+    # Catch NameError so that things that are invalid symbols still get
+    # a useful error message.
     raise FormulaUnavailableError.new(name)
   end
 
@@ -467,6 +470,8 @@ protected
     removed_ENV_variables = case if args.empty? then cmd.split(' ').first else cmd end
     when "xcodebuild"
       ENV.remove_cc_etc
+    when /^make\b/
+      ENV.append 'HOMEBREW_CCCFG', "O", ''
     end
 
     if ARGV.verbose?
@@ -497,6 +502,8 @@ protected
 
   rescue
     raise BuildError.new(self, cmd, args, $?)
+  ensure
+    ENV['HOMEBREW_CCCFG'] = ENV['HOMEBREW_CCCFG'].delete('O') if ENV['HOMEBREW_CCCFG']
   end
 
 public
@@ -658,10 +665,11 @@ private
       #{formula} cannot be installed alongside #{name.downcase}.
       EOS
       message << "This is because #{opts[:because]}\n" if opts[:because]
-      if !ARGV.force? then message << <<-EOS.undent
-      Please `brew unlink` or `brew uninstall` #{formula} before continuing.
-      To install anyway, use:
-        brew install --force
+      unless ARGV.force? then message << <<-EOS.undent
+        Please `brew unlink #{formula}` before continuing. Unlinking removes
+        the formula's symlinks from #{HOMEBREW_PREFIX}. You can link the
+        formula again after the install finishes. You can --force this install
+        but the build may fail or cause obscure side-effects in the end-binary.
         EOS
       end
 
